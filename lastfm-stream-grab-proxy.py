@@ -32,7 +32,6 @@ class ProxyHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
             return
         sock = self._connect(netloc)
         if sock is not None:
-            self.log_request()
             if self.headers.has_key('Proxy-Connection'):
                 del self.headers['Proxy-Connection']
             self.headers['Connection'] = 'close'
@@ -77,7 +76,6 @@ class ProxyHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
             if idle_count >= max_idle: break
 
 def run_server(addr, port):
-    #httpd = SocketServer.ForkingTCPServer((addr, port), ProxyHandler)
     httpd = SocketServer.ThreadingTCPServer((addr, port), ProxyHandler)
     print 'Listening on %s:%d' % (addr, port)
     try: httpd.serve_forever(poll_interval=0.5)
