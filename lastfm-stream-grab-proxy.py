@@ -5,6 +5,9 @@ import SimpleHTTPServer
 import urllib
 
 class ProxyHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
+    def foo(self):
+        x = 1
+
     def do_GET(self):
         self.copyfile(urllib.urlopen(self.path), self.wfile)
 
