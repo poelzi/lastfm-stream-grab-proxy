@@ -4,6 +4,7 @@ import SocketServer
 import SimpleHTTPServer
 import socket
 from select import select
+import random
 import urlparse
 import re
 from xml.dom.minidom import parseString
@@ -34,7 +35,7 @@ class LastFMSupport():
         self.mp3_re = re.compile('\.mp3$')
         self.xml_re = re.compile('method=radio.*getPlaylist')
 
-    def get_track_info_from_xml(xml):
+    def get_track_info_from_xml(self, xml):
         metadata = {}
         xml_data = parseString(xml)
         tracks = xml_data.getElementsByTagName('track')
@@ -57,6 +58,11 @@ class LastFMSupport():
 
         return metadata
 
+    def update_track_info_from_xml(self, xml):
+        metadata = self.get_track_info_from_xml(xml)
+        for k, v in metadata.items():
+            self.track_info_cache.set(k, v)
+
     def update_id3_tag(filename, info):
         needs_update = 0
         id3 = ID3(filename)
@@ -71,15 +77,15 @@ class ProxyHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
     def __init__(self, *args):
         self.protocol = 'HTTP/1.0'
         self.rbufsize = 0
-        SimpleHTTPServer.SimpleHTTPRequestHandler.__init__(self, *args)
         self.lastfm = LastFMSupport()
+        SimpleHTTPServer.SimpleHTTPRequestHandler.__init__(self, *args)
 
-    def _strip_http_headers(http_response):
+    def _strip_http_headers(self, http_response):
         end_headers = re.search('(\r\n\r\n)', http_response).span()[1]
         stripped = http_response[end_headers:]
         return stripped
 
-    def _needs_decompression(http_data):
+    def _needs_decompression(self, http_data):
         needs_decompression = 0
         m = re.search('Content-Encoding: ([^\r\n]+)', http_data)
         if m:
@@ -114,23 +120,32 @@ class ProxyHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
             self.headers['Connection'] = 'close'
 
             sock.send("%s %s %s\r\n" % (self.command, self.path, self.request_version))
-            #sock.send("%s %s %s\r\n" % (self.command,
-            #    urlparse.urlunparse(('', '', path, params, query, '')),
-            #    self.request_version))
 
             for header in self.headers.items():
                 sock.send("%s: %s\r\n" % header)
             sock.send("\r\n")
 
-            #found_xml = self.lastfm.xml_re.search(self.path)
-            #found_mp3 = self.lastfm.mp3_re.search(self.path)
+            found_xml = self.lastfm.xml_re.search(self.path)
+            found_mp3 = self.lastfm.mp3_re.search(self.path)
 
-            #if found_xml or found_mp3:
-            #    print 'Found an xml or mp3 file'
-            #    content = self._read_write(sock, True)
-            #else:
-            #    self._read_write(sock)
-            self._read_write(sock)
+            if found_xml or found_mp3:
+                print 'Found an xml or mp3 file'
+                content = self._read_write(sock, True)
+                if found_xml: self.lastfm.update_track_info_from_xml(content)
+                if found_mp3 and content is not None:
+                    filename = 'filerand%d.mp3' % random.randint(1, 1000000)
+                    m = re.search('last\.fm/user/\d+/([^/]+)/', self.path)
+                    if m:
+                        song_key = m.groups()[0]
+                        meta = self.lastfm.track_info_cache.get(song_key)
+                        filename = '%s - %s.mp3' % (meta['creator'], meta['title'])
+                    print 'Writing %d bytes to %s' % (len(content), filename)
+                    f = open(filename, 'wb')
+                    f.write(content)
+                    f.close()
+                    self.lastfm.update_id3_tag(filename, {'CREATOR': meta['creator'], 'TITLE': meta['title'], 'ALBUM': meta['album']})
+            else:
+                self._read_write(sock)
         else:
             self.send_error(404, "Could not connect to host %s:%d" % (netloc, port))
 
@@ -170,11 +185,10 @@ class ProxyHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
                         else:
                             server_sock.send(data)
             if idle_count >= max_idle: break
-        return None
 
         if save_data and len(http_content):
-            needs_decompression = _needs_decompression(http_content)
-            http_content = _strip_http_headers(http_content)
+            needs_decompression = self._needs_decompression(http_content)
+            http_content = self._strip_http_headers(http_content)
             if needs_decompression:
                 buf = StringIO(http_content)
                 http_content = gzip.GzipFile(fileobj=buf).read()
