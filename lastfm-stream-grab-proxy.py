@@ -8,9 +8,11 @@ from urlparse import urlparse
 import re
 
 class ProxyHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
+
     def __init__(self, *args):
-        SimpleHTTPServer.SimpleHTTPRequestHandler.__init__(self, *args)
         self.protocol = 'HTTP/1.0'
+        self.rbufsize = 0
+        SimpleHTTPServer.SimpleHTTPRequestHandler.__init__(self, *args)
 
     def _connect(self, netloc):
         port = 80
