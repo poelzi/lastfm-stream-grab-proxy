@@ -61,6 +61,7 @@ class LastFMSupport():
     def update_track_info_from_xml(self, xml):
         metadata = self.get_track_info_from_xml(xml)
         for k, v in metadata.items():
+            print 'found track info for %s - %s' % (v['creator'], v['title'])
             self.track_info_cache.set(k, v)
 
     def update_id3_tag(filename, info):
