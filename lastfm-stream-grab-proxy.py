@@ -28,10 +28,11 @@ class TrackInfoCache:
     def delete(self, key):
         if self._cache.has_key(key): del self._cache[key]
 
+track_info_cache = TrackInfoCache()
 
 class LastFMSupport():
     def __init__(self):
-        self.track_info_cache = TrackInfoCache()
+        #self.track_info_cache = TrackInfoCache()
         self.mp3_re = re.compile('\.mp3$')
         self.xml_re = re.compile('method=radio.*getPlaylist')
 
@@ -53,7 +54,7 @@ class LastFMSupport():
                     key = m.groups()[0]
                     metadata[key] = track_info
                 else:
-                    print 'no track location ' % track_info['location']
+                    print 'WARNING: No track location ' % track_info['location']
             except: pass
 
         return metadata
@@ -61,10 +62,9 @@ class LastFMSupport():
     def update_track_info_from_xml(self, xml):
         metadata = self.get_track_info_from_xml(xml)
         for k, v in metadata.items():
-            print 'found track info for %s - %s' % (v['creator'], v['title'])
-            self.track_info_cache.set(k, v)
+            track_info_cache.set(k, v)
 
-    def update_id3_tag(filename, info):
+    def update_id3_tag(self, filename, info):
         needs_update = 0
         id3 = ID3(filename)
         for k, v in info.items():
@@ -110,7 +110,6 @@ class ProxyHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
 
     def _do_method(self):
         (scheme, netloc, path, params, query, fragment) = urlparse.urlparse(self.path, scheme='http')
-        print 'trying to get %s' % self.path
         if scheme != 'http' or fragment or netloc == None:
             self.send_error(400, 'Invalid URL %s' % self.path)
             return
@@ -138,13 +137,14 @@ class ProxyHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
                     m = re.search('last\.fm/user/\d+/([^/]+)/', self.path)
                     if m:
                         song_key = m.groups()[0]
-                        meta = self.lastfm.track_info_cache.get(song_key)
+                        meta = track_info_cache.get(song_key)
+                        track_info_cache.delete(song_key)
                         filename = '%s - %s.mp3' % (meta['creator'], meta['title'])
                     print 'Writing %d bytes to %s' % (len(content), filename)
                     f = open(filename, 'wb')
                     f.write(content)
                     f.close()
-                    self.lastfm.update_id3_tag(filename, {'CREATOR': meta['creator'], 'TITLE': meta['title'], 'ALBUM': meta['album']})
+                    self.lastfm.update_id3_tag(filename, {'ARTIST': meta['creator'], 'TITLE': meta['title'], 'ALBUM': meta['album']})
             else:
                 self._read_write(sock)
         else:
