@@ -7,6 +7,7 @@ How to use
 ----------
 
 At the command line run:
+
 > python lastfm-stream-grab-proxy.py
 
 If you have the necessary python modules installed, a message will be displayed indicating that the proxy is ready.
