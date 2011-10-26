@@ -150,18 +150,34 @@ class ProxyHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
                 content = self._read_write(sock, True)
                 if found_xml: self.lastfm.update_track_info_from_xml(content)
                 if found_mp3 and content is not None:
-                    filename = 'filerand%d.mp3' % random.randint(1, 1000000)
                     m = re.search('last\.fm/user/\d+/([^/]+)/', self.path)
                     if m:
                         song_key = m.groups()[0]
                         meta = track_info_cache.get(song_key)
                         track_info_cache.delete(song_key)
-                        filename = '%s - %s.mp3' % (meta['creator'], meta['title'])
-                    print 'Writing %d bytes to %s' % (len(content), filename)
-                    f = open(filename, 'wb')
-                    f.write(content)
-                    f.close()
-                    self.lastfm.update_id3_tag(filename, {'ARTIST': meta['creator'], 'TITLE': meta['title'], 'ALBUM': meta['album']})
+                        try:
+                            filename = '%s - %s.mp3' % (meta['creator'], meta['title'])
+                        except Exception, e:
+                            print 'Oh no, could not lookup track info: %s' % e
+                            filename = 'filerand%d.mp3' % random.randint(1, 1000000)
+                    try:
+                        f = open(filename, 'wb')
+                    except:
+                        print 'Could not create file %s' % filename
+                        filename = 'filerand%d.mp3' % random.randint(1, 1000000)
+                        try:
+                            f = open(filename, 'wb')
+                        except:
+                            print 'Oh no. Can\'t write to %s either' %s
+
+                    if f:
+                        print 'Writing %d bytes to %s' % (len(content), filename)
+                        f.write(content)
+                        f.close()
+                        try:
+                            self.lastfm.update_id3_tag(filename, {'ARTIST': meta['creator'], 'TITLE': meta['title'], 'ALBUM': meta['album']})
+                        except:
+                            print 'Could not update ID3 tag'
             else:
                 self._read_write(sock)
         else:
