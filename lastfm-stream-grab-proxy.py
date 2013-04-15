@@ -230,14 +230,14 @@ class ProxyHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
                 print 'Oh no, could not lookup track info: %s' % e
                 filename = 'filerand%d.mp3' % random.randint(1, 1000000)
         
-        full_path = os.path.join(args.output, filename)
+        full_path = os.path.expanduser(os.path.join(args.output, filename))
         mkdir_p(os.path.dirname(full_path))
                 
         try:
             f = open(full_path, 'wb')
         except:
             print 'Could not create file %s' % full_path
-            full_path = os.path.join(os.path.dirname(full_path), 'filerand%d.mp3' % random.randint(1, 1000000))
+            full_path = os.path.expanduser(os.path.join(os.path.dirname(full_path), 'filerand%d.mp3' % random.randint(1, 1000000)))
             try:
                 f = open(full_path, 'wb')
             except:
@@ -248,7 +248,7 @@ class ProxyHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
             f.write(content)
             f.close()
             try:
-                self.lastfm.update_id3_tag(filename, {'ARTIST': meta['creator'], 'TITLE': meta['title'], 'ALBUM': meta['album']})
+                self.lastfm.update_id3_tag(full_path, {'ARTIST': meta['creator'], 'TITLE': meta['title'], 'ALBUM': meta['album']})
             except:
                 print 'Could not update ID3 tag'        
         
