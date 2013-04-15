@@ -115,7 +115,6 @@ class LastFMSupport():
         metadata = {}
         xml_data = parseString(xml)
         tracks = xml_data.getElementsByTagName('track')
-        debug(xml)
         for track in tracks:
             track_info = {}
             try:
