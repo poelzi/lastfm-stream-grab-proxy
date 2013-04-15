@@ -27,28 +27,61 @@ import re
 from xml.dom.minidom import parseString
 from ID3 import ID3
 from StringIO import StringIO
+import errno
 import gzip
 import os
+import argparse
+
+parser = argparse.ArgumentParser(description='last.fm store proxy.',
+                                 formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+parser.add_argument('--no-proxy', default=False, action="store_true",
+                   help='ignore proxy environment')
+parser.add_argument('--debug', default=False, action="store_true",
+                   help='print debug output')
+parser.add_argument('--output', default=".",
+                   help='ignore proxy environment')
+parser.add_argument('--format', default="{artist}/{album}/{title}.mp3",
+                   help='save files with pattern. Possible arguments: artist, album, title, station')
+
+#parser.add_argument('integers', metavar='N', type=int, nargs='+',
+#                   help='an integer for the accumulator')
+#parser.add_argument('--sum', dest='accumulate', action='store_const',
+#                   const=sum, default=max,
+#                   help='sum the integers (default: find the max)')
+
+args = parser.parse_args()
 
 proxy_so = os.environ.get("SOCKS_SERVER", None) or os.environ.get("socks_server", None)
 proxy_http = os.environ.get("HTTP_PROXY", None) or os.environ.get("http_proxy", None)
-try:
-    import socks
-    print "use proxy: %s" %(proxy_so or proxy_http)
-except ImportError, e:
-    print "For proxy support, install python-socksipy"
-    os.exit(-1)
+if args.no_proxy == False and (proxy_so or proxy_http):
+    try:
+        import socks
+        print "use proxy: %s" %(proxy_so or proxy_http)
+    except ImportError, e:
+        print "For proxy support, install python-socksipy"
+        os.exit(-1)
 
+def debug(msg):
+    if args.debug:
+        print "msg"
+        
+def mkdir_p(path):
+    try:
+        os.makedirs(path)
+    except OSError as exc:
+        if exc.errno == errno.EEXIST and os.path.isdir(path):
+            pass
+        else: raise
 
 class TrackInfoCache:
     def __init__(self):
         self._cache = {}
 
-    def get(self, key):
+    def get(self, key, default=None):
         if self._cache.has_key(key):
             return self._cache[key]
         else:
-            return None
+            return default
 
     def set(self, key, data):
         self._cache[key] = data
@@ -61,15 +94,28 @@ track_info_cache = TrackInfoCache()
 class LastFMSupport():
     def __init__(self):
         #self.track_info_cache = TrackInfoCache()
-        self.mp3_re = re.compile('s([0-9]+)\.last\.fm.*\.mp3$')
+        self.mp3_re = re.compile('[a-z]+([0-9]+)\.last\.fm.*\.mp3$')
         #self.xml_re = re.compile('method=radio.*getPlaylist')
         self.xml_re = re.compile('ws.audioscrobbler.com/radio/xspf.php')
-
+        self.station_re = re.compile('ws.audioscrobbler.com/radio/adjust.php')
+        self.station = "Unknown Station"
+        
+    def update_station(self, url):
+        try:
+            p = urlparse.urlparse(url)
+            station = urlparse.parse_qs(p.query)["url"][0]
+            self.station = station.replace("lastfm://", "").replace("/", "-")
+            print "listening to station: %s" %self.station
+        except Exception as e:
+            self.station = "Unknown Station"
+            print "error parsing station: %s" %e
+        
+        
     def get_track_info_from_xml(self, xml):
         metadata = {}
         xml_data = parseString(xml)
         tracks = xml_data.getElementsByTagName('track')
-
+        debug(xml)
         for track in tracks:
             track_info = {}
             try:
@@ -85,7 +131,14 @@ class LastFMSupport():
                 else:
                     print 'WARNING: No track location ' % track_info['location']
             except: pass
-
+        # update station title
+        try:
+            for node in xml_data.childNodes[0].childNodes:
+                if node.nodeName == 'title':
+                    self.station = node.childNodes[0].wholeText
+                    track_info_cache.set("station", self.station)
+        except Exception as e:
+            print "can't find title: %s" %e
         return metadata
 
     def update_track_info_from_xml(self, xml):
@@ -126,7 +179,7 @@ class ProxyHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
         return needs_decompression
 
     def _get_socket(self):
-        if proxy_so or proxy_http:
+        if args.no_proxy == False and (proxy_so or proxy_http):
             sock = socks.socksocket()
             if proxy_so:
                 s = self.proxy_re.search(proxy_so)
@@ -158,6 +211,47 @@ class ProxyHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
             return None
         return sock
 
+    def write_mp3(self, content):
+        print 'Found mp3 file'
+        m = re.search('last\.fm/user/\d+/([^/]+)/', self.path)
+        if m:
+            song_key = m.groups()[0]
+            meta = track_info_cache.get(song_key)
+            track_info_cache.delete(song_key)
+            station = track_info_cache.get("station", "Unknown Station")
+            data = dict(artist="unknown", album="unknown", title="unknown", station=station)
+            if meta:
+                data.update(meta)
+            data["artist"] = data["creator"]
+            try:
+                debug(data)
+                filename = unicode(args.format).format(**data)
+            except Exception, e:
+                print 'Oh no, could not lookup track info: %s' % e
+                filename = 'filerand%d.mp3' % random.randint(1, 1000000)
+        
+        full_path = os.path.join(args.output, filename)
+        mkdir_p(os.path.dirname(full_path))
+                
+        try:
+            f = open(full_path, 'wb')
+        except:
+            print 'Could not create file %s' % full_path
+            full_path = os.path.join(os.path.dirname(full_path), 'filerand%d.mp3' % random.randint(1, 1000000))
+            try:
+                f = open(full_path, 'wb')
+            except:
+                print 'Oh no. Can\'t write to %s either' %s
+
+        if f:
+            print 'Writing %d bytes to %s' % (len(content), filename)
+            f.write(content)
+            f.close()
+            try:
+                self.lastfm.update_id3_tag(filename, {'ARTIST': meta['creator'], 'TITLE': meta['title'], 'ALBUM': meta['album']})
+            except:
+                print 'Could not update ID3 tag'        
+        
     def _do_method(self):
         (scheme, netloc, path, params, query, fragment) = urlparse.urlparse(self.path, scheme='http')
         if scheme != 'http' or fragment or netloc == None:
@@ -178,41 +272,16 @@ class ProxyHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
             found_xml = self.lastfm.xml_re.search(self.path)
             found_mp3 = self.lastfm.mp3_re.search(self.path)
 
+            if self.lastfm.station_re.search(self.path):
+                self.lastfm.update_station(self.path)
+            
             if found_xml or found_mp3:
                 content = self._read_write(sock, True)
                 if found_xml and content is not None: 
                     print 'Found an xml'
                     self.lastfm.update_track_info_from_xml(content)
                 if found_mp3 and content is not None:
-                    print 'Found mp3 file'
-                    m = re.search('last\.fm/user/\d+/([^/]+)/', self.path)
-                    if m:
-                        song_key = m.groups()[0]
-                        meta = track_info_cache.get(song_key)
-                        track_info_cache.delete(song_key)
-                        try:
-                            filename = '%s - %s.mp3' % (meta['creator'], meta['title'])
-                        except Exception, e:
-                            print 'Oh no, could not lookup track info: %s' % e
-                            filename = 'filerand%d.mp3' % random.randint(1, 1000000)
-                    try:
-                        f = open(filename, 'wb')
-                    except:
-                        print 'Could not create file %s' % filename
-                        filename = 'filerand%d.mp3' % random.randint(1, 1000000)
-                        try:
-                            f = open(filename, 'wb')
-                        except:
-                            print 'Oh no. Can\'t write to %s either' %s
-
-                    if f:
-                        print 'Writing %d bytes to %s' % (len(content), filename)
-                        f.write(content)
-                        f.close()
-                        try:
-                            self.lastfm.update_id3_tag(filename, {'ARTIST': meta['creator'], 'TITLE': meta['title'], 'ALBUM': meta['album']})
-                        except:
-                            print 'Could not update ID3 tag'
+                    self.write_mp3(content)
             else:
                 self._read_write(sock)
         else:
