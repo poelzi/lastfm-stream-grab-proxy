@@ -28,6 +28,17 @@ from xml.dom.minidom import parseString
 from ID3 import ID3
 from StringIO import StringIO
 import gzip
+import os
+
+proxy_so = os.environ.get("SOCKS_SERVER", None) or os.environ.get("socks_server", None)
+proxy_http = os.environ.get("HTTP_PROXY", None) or os.environ.get("http_proxy", None)
+try:
+    import socks
+    print "use proxy: %s" %(proxy_so or proxy_http)
+except ImportError, e:
+    print "For proxy support, install python-socksipy"
+    os.exit(-1)
+
 
 class TrackInfoCache:
     def __init__(self):
@@ -50,8 +61,9 @@ track_info_cache = TrackInfoCache()
 class LastFMSupport():
     def __init__(self):
         #self.track_info_cache = TrackInfoCache()
-        self.mp3_re = re.compile('\.mp3$')
-        self.xml_re = re.compile('method=radio.*getPlaylist')
+        self.mp3_re = re.compile('s([0-9]+)\.last\.fm.*\.mp3$')
+        #self.xml_re = re.compile('method=radio.*getPlaylist')
+        self.xml_re = re.compile('ws.audioscrobbler.com/radio/xspf.php')
 
     def get_track_info_from_xml(self, xml):
         metadata = {}
@@ -96,6 +108,7 @@ class ProxyHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
         self.protocol = 'HTTP/1.0'
         self.rbufsize = 0
         self.lastfm = LastFMSupport()
+        self.proxy_re = re.compile(r'(?P<host>[^:/ ]+).?(?P<port>[0-9]*)') # FIXME: ipv6 ip support
         SimpleHTTPServer.SimpleHTTPRequestHandler.__init__(self, *args)
 
     def _strip_http_headers(self, http_response):
@@ -112,6 +125,23 @@ class ProxyHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
                     needs_decompression = 1
         return needs_decompression
 
+    def _get_socket(self):
+        if proxy_so or proxy_http:
+            sock = socks.socksocket()
+            if proxy_so:
+                s = self.proxy_re.search(proxy_so)
+                sock.setproxy(socks.PROXY_TYPE_SOCKS5,s.group("host"), int(s.group("port")) or 1080)
+            elif proxy_http:
+                #s = self.proxy_re.search(http)
+                s = urlparse.urlparse(proxy_http)
+                s = self.proxy_re.search(s.netloc)
+                sock.setproxy(socks.PROXY_TYPE_HTTP, s.group("host"), int(s.group("port")) or 8080)   
+            return sock
+        else:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            return sock
+        
+        
     def _connect(self, netloc):
         port = 80
         separator = netloc.find(':')
@@ -119,7 +149,10 @@ class ProxyHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
             port = int(netloc[separator+1:])
             netloc = netloc[:separator]
 
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        #sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        #sock = socks.socksocket()
+        #sock.setproxy(socks.PROXY_TYPE_SOCKS5,"localhost", 10800)
+        sock = self._get_socket()
         try: sock.connect((netloc, port))
         except socket.error:
             return None
@@ -146,10 +179,12 @@ class ProxyHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
             found_mp3 = self.lastfm.mp3_re.search(self.path)
 
             if found_xml or found_mp3:
-                print 'Found an xml or mp3 file'
                 content = self._read_write(sock, True)
-                if found_xml: self.lastfm.update_track_info_from_xml(content)
+                if found_xml and content is not None: 
+                    print 'Found an xml'
+                    self.lastfm.update_track_info_from_xml(content)
                 if found_mp3 and content is not None:
+                    print 'Found mp3 file'
                     m = re.search('last\.fm/user/\d+/([^/]+)/', self.path)
                     if m:
                         song_key = m.groups()[0]
@@ -231,6 +266,7 @@ class ProxyHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
 
 
 def run_server(addr, port):
+    SocketServer.ThreadingTCPServer.allow_reuse_address = True
     httpd = SocketServer.ThreadingTCPServer((addr, port), ProxyHandler)
     print 'Listening on %s:%d' % (addr, port)
     try: httpd.serve_forever(poll_interval=0.5)
