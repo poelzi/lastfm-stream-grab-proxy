@@ -42,6 +42,8 @@ parser.add_argument('--output', default=".",
                    help='ignore proxy environment')
 parser.add_argument('--format', default="{artist}/{album}/{title}.mp3",
                    help='save files with pattern. Possible arguments: artist, album, title, station')
+parser.add_argument('--link', default="",
+                   help='link the file to this pattern (same as format)')
 
 #parser.add_argument('integers', metavar='N', type=int, nargs='+',
 #                   help='an integer for the accumulator')
@@ -210,46 +212,76 @@ class ProxyHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
             return None
         return sock
 
+    def build_path(self, meta, form):
+        station = track_info_cache.get("station", "Unknown Station")
+        data = dict(artist="unknown", album="unknown", title="unknown", station=station)
+        if meta:
+            data.update(meta)
+        data["artist"] = data["creator"]
+        try:
+           filename = unicode(form).format(**data)
+           return (filename, True)
+        except Exception, e:
+            print 'Oh no, could not lookup track info: %s' % e
+            filename = u'filerand%d.mp3' % random.randint(1, 1000000)
+            return (filename, False)
+        
     def write_mp3(self, content):
         print 'Found mp3 file'
         m = re.search('last\.fm/user/\d+/([^/]+)/', self.path)
         if m:
             song_key = m.groups()[0]
             meta = track_info_cache.get(song_key)
-            track_info_cache.delete(song_key)
-            station = track_info_cache.get("station", "Unknown Station")
-            data = dict(artist="unknown", album="unknown", title="unknown", station=station)
-            if meta:
-                data.update(meta)
-            data["artist"] = data["creator"]
-            try:
-                debug(data)
-                filename = unicode(args.format).format(**data)
-            except Exception, e:
-                print 'Oh no, could not lookup track info: %s' % e
-                filename = 'filerand%d.mp3' % random.randint(1, 1000000)
+            filename = self.build_path(meta, args.format)[0]
         
         full_path = os.path.expanduser(os.path.join(args.output, filename))
         mkdir_p(os.path.dirname(full_path))
-                
-        try:
-            f = open(full_path, 'wb')
-        except:
-            print 'Could not create file %s' % full_path
-            full_path = os.path.expanduser(os.path.join(os.path.dirname(full_path), 'filerand%d.mp3' % random.randint(1, 1000000)))
+        
+        write_file = True
+        if os.path.exists(full_path):
+            try:
+                st = os.stat(full_path)
+                if st.st_size > len(content):
+                    print 'Skip file %s. Larger file already exists (%d > %d)' % (filename, st.st_size, len(content))
+                    write_file = False
+            except (Exception, e):
+                print e
+        
+        if write_file:
             try:
                 f = open(full_path, 'wb')
             except:
-                print 'Oh no. Can\'t write to %s either' %s
+                print 'Could not create file %s' % full_path
+                full_path = os.path.expanduser(os.path.join(os.path.dirname(full_path), 'filerand%d.mp3' % random.randint(1, 1000000)))
+                try:
+                    f = open(full_path, 'wb')
+                except:
+                    print 'Oh no. Can\'t write to %s either' %s
 
-        if f:
-            print 'Writing %d bytes to %s' % (len(content), filename)
-            f.write(content)
-            f.close()
+            if f:
+                print 'Writing %d bytes to %s' % (len(content), filename)
+                f.write(content)
+                f.close()
+                try:
+                    self.lastfm.update_id3_tag(full_path, {'ARTIST': meta['creator'], 'TITLE': meta['title'], 'ALBUM': meta['album']})
+                except:
+                    print 'Could not update ID3 tag'
+        
+        if args.link:
             try:
-                self.lastfm.update_id3_tag(full_path, {'ARTIST': meta['creator'], 'TITLE': meta['title'], 'ALBUM': meta['album']})
-            except:
-                print 'Could not update ID3 tag'        
+                link_filename = self.build_path(meta, args.link)
+                #print link_filename
+                if link_filename[1] == False:
+                    raise Exception("No metadata available")
+                link_filename = link_filename[0]
+                link_path = os.path.expanduser(os.path.join(args.output, link_filename))
+                mkdir_p(os.path.dirname(link_path))
+                rel_path = os.path.relpath(os.path.dirname(full_path), os.path.dirname(link_path))
+                if not os.path.exists(link_path):
+                    os.symlink(os.path.join(rel_path, os.path.basename(link_path)), link_path)
+            except Exception as e:
+                print "Error creating link: %s" %e
+            
         
     def _do_method(self):
         (scheme, netloc, path, params, query, fragment) = urlparse.urlparse(self.path, scheme='http')
